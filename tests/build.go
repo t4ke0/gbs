@@ -45,6 +45,15 @@ func cleanInputProgram() error {
 
 func main() {
 
+	// build the script and runs itself. if the current file has changed.
+	ok, err := gbs.GoBuildYourSelf("build.go")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if ok {
+		return
+	}
+
 	opts := []gbs.BuildFuncOpt{
 		gbs.BuildFuncOpt{
 			FuncName: "buildNormalProgram",
