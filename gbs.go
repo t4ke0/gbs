@@ -6,7 +6,46 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+var GBSFile string = fmt.Sprintf("%s/gbs_file", os.TempDir())
+
+func storeModTime(buildFile string) (bool, error) {
+	fileInfo, err := os.Stat(buildFile)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = os.Stat(GBSFile)
+	if os.IsNotExist(err) {
+		if err := os.WriteFile(GBSFile, []byte(fileInfo.ModTime().String()), 0666); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	data, err := os.ReadFile(GBSFile)
+	if err != nil {
+		return false, err
+	}
+
+	sp := strings.Split(string(data), " ")
+	strTime := strings.Join(sp[:len(sp)-2], " ")
+	t, err := time.Parse("2006-01-02 15:04:05", strTime)
+	if err != nil {
+		return false, err
+	}
+
+	if !fileInfo.ModTime().Equal(t) {
+		if err := os.WriteFile(GBSFile, []byte(fileInfo.ModTime().String()), 0666); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	return false, nil
+}
 
 // BuilderFunc
 type BuilderFunc func() error
@@ -15,6 +54,26 @@ type BuilderFunc func() error
 type BuildFuncOpt struct {
 	FuncName string
 	Func     BuilderFunc
+}
+
+// GoBuildYourSelf checks buildFile modification time and decide whether to
+// re-build and run the script or not.
+func GoBuildYourSelf(buildFile string) (bool, error) {
+	ok, err := storeModTime(buildFile)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		var command string = fmt.Sprintf("go build -o %s %s", os.Args[0], buildFile)
+		if err := new(Sh).Init(command).Run().Error(); err != nil {
+			return false, err
+		}
+		if err := new(Sh).Init(fmt.Sprintf("./%s", os.Args[0])).Run().Error(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // Build accept BuildFuncOpt and retuns an error if any of the BuilderFunc has
