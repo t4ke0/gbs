@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
+// GBSFile temp file that stores the modification time of the build script.
 var GBSFile string = fmt.Sprintf("%s/gbs_file", os.TempDir())
 
 func storeModTime(buildFile string) (bool, error) {
@@ -47,10 +49,11 @@ func storeModTime(buildFile string) (bool, error) {
 	return false, nil
 }
 
-// BuilderFunc
+// BuilderFunc type that represents the build function that we pass into Build
+// function.
 type BuilderFunc func() error
 
-// BuildFuncOpt
+// BuildFuncOpt build options.
 type BuildFuncOpt struct {
 	FuncName string
 	Func     BuilderFunc
@@ -89,6 +92,8 @@ func Build(opts ...BuildFuncOpt) error {
 }
 
 // Sh
+// Builder function `Build`
+type Builder func(...BuildFuncOpt) error
 type Sh struct {
 	cmd *exec.Cmd
 
@@ -116,7 +121,7 @@ func (s *Sh) Init(command string) *Sh {
 	return s
 }
 
-// Run
+// Run Sh method that runs the command provided in Init method.
 func (s *Sh) Run() *Sh {
 	if s.cmd == nil {
 		s.err = fmt.Errorf("sh is not initialized please use Init method.")
@@ -139,7 +144,8 @@ func (s *Sh) Run() *Sh {
 	return s
 }
 
-// In
+// In accept run command and pass the `inCommand` param into the program via
+// stdin.
 func (s *Sh) In(inCommand string) *Sh {
 	writer, err := s.cmd.StdinPipe()
 	if err != nil {
@@ -180,7 +186,8 @@ func (s *Sh) In(inCommand string) *Sh {
 	return s
 }
 
-// Error
+// Error returns any error that occurs during the process of running the
+// command with Sh.
 func (s *Sh) Error() error {
 	return s.err
 }
