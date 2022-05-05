@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
+// GBSFile temp file that stores the modification time of the build script.
 var GBSFile string = fmt.Sprintf("%s/gbs_file", os.TempDir())
 
 func storeModTime(buildFile string) (bool, error) {
@@ -47,10 +49,11 @@ func storeModTime(buildFile string) (bool, error) {
 	return false, nil
 }
 
-// BuilderFunc
+// BuilderFunc type that represents the build function that we pass into Build
+// function.
 type BuilderFunc func() error
 
-// BuildFuncOpt
+// BuildFuncOpt build options.
 type BuildFuncOpt struct {
 	FuncName string
 	Func     BuilderFunc
@@ -88,14 +91,140 @@ func Build(opts ...BuildFuncOpt) error {
 	return nil
 }
 
-// Sh
+// Builder function `Build`
+type Builder func(...BuildFuncOpt) error
+
+// LiveFiles
+type LiveFile struct {
+	Name    string
+	ModTime time.Time
+}
+
+// LiveBuild live build your project by tracking all go files and check
+// their modification time. then run the builder function once any go file
+// has been changed.
+func LiveBuild(dir string, builder Builder, cancel chan struct{}) error {
+
+	var goFiles []LiveFile
+	err := searchGoFiles(dir, &goFiles)
+	if err != nil {
+		return err
+	}
+
+	ping := make(chan struct{})
+	stop := make(chan bool)
+
+	defer close(ping)
+	defer close(stop)
+
+	var errG error
+	go func() {
+		for {
+			select {
+			case <-cancel:
+				stop <- true
+				return
+			case <-ping: 
+				if err := builder(); err != nil {
+					errG = err
+					stop <- true
+					return
+				}
+			}
+		}
+	}()
+
+	queue := goFilesToQueue(goFiles)
+	if err := runGoFilesTrackers(queue, ping, stop); err != nil {
+		return err
+	}
+	return errG
+}
+
+func searchGoFiles(dir string, q *[]LiveFile) error {
+	const goExt string = ".go"
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if f.IsDir() {
+			dirPath := filepath.Join(dir, f.Name())
+			searchGoFiles(dirPath, q)
+			continue
+		}
+		if filepath.Ext(f.Name()) == goExt {
+			info, err := f.Info()
+			if err != nil {
+				return err
+			}
+			liveFile := LiveFile{
+				Name:    filepath.Join(dir, f.Name()),
+				ModTime: info.ModTime(),
+			}
+			*q = append(*q, liveFile)
+		}
+	}
+	return nil
+}
+
+func goFilesToQueue(files []LiveFile) <-chan LiveFile {
+	out := make(chan LiveFile)
+	go func() {
+		defer close(out)
+		for _, f := range files {
+			out <- f
+		}
+	}()
+
+	return out
+}
+
+func runGoFilesTrackers(c <-chan LiveFile, out chan struct{}, cancel chan bool) error {
+
+	errC := make(chan error)
+
+	for f := range c {
+		go func(file LiveFile) {
+			const timeout = time.Second * 1
+			t := time.NewTimer(timeout)
+			mod := file.ModTime
+			for {
+				fInfo, err := os.Stat(file.Name)
+				if err != nil {
+					errC <- err
+					return
+				}
+				if !mod.Equal(fInfo.ModTime()) {
+					out <- struct{}{}
+					mod = fInfo.ModTime()
+				}
+				<-t.C
+				t.Reset(timeout)
+			}
+		}(f)
+	}
+
+
+	select {
+	case <-cancel:
+		return nil
+	case err := <-errC:
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Sh structure that represents a shell that runs shell commands.
 type Sh struct {
 	cmd *exec.Cmd
 
 	err error
 }
 
-// Init
+// Init initialize Sh shell. by passing the command that you are going to run.
 func (s *Sh) Init(command string) *Sh {
 	sp := strings.Split(command, " ")
 	var (
@@ -116,7 +245,7 @@ func (s *Sh) Init(command string) *Sh {
 	return s
 }
 
-// Run
+// Run Sh method that runs the command provided in Init method.
 func (s *Sh) Run() *Sh {
 	if s.cmd == nil {
 		s.err = fmt.Errorf("sh is not initialized please use Init method.")
@@ -139,7 +268,8 @@ func (s *Sh) Run() *Sh {
 	return s
 }
 
-// In
+// In accept run command and pass the `inCommand` param into the program via
+// stdin.
 func (s *Sh) In(inCommand string) *Sh {
 	writer, err := s.cmd.StdinPipe()
 	if err != nil {
@@ -180,7 +310,8 @@ func (s *Sh) In(inCommand string) *Sh {
 	return s
 }
 
-// Error
+// Error returns any error that occurs during the process of running the
+// command with Sh.
 func (s *Sh) Error() error {
 	return s.err
 }
